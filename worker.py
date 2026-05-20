@@ -21,7 +21,7 @@ import models
 from analyzer import analyzer as brain_analyzer
 
 @celery_app.task(name="process_video_task", bind=True, max_retries=3)
-def process_video_task(self, video_id: str, video_path: str):
+def process_video_task(self, video_id: str, video_path: str, is_npz: bool = False):
     db = SessionLocal()
     video = db.query(models.Video).filter(models.Video.id == video_id).first()
     if not video:
@@ -29,44 +29,48 @@ def process_video_task(self, video_id: str, video_path: str):
         return {"error": "Video not found"}
         
     try:
-        # 1. Submit to TRIBEv2
-        video.status = models.JobStatus.INFERENCE
-        db.commit()
-        
-        url = f"{TRIBEV2_API_BASE_URL}/api/v1/jobs/analyze"
-        with open(video_path, "rb") as f:
-            resp = requests.post(url, files={"video": (os.path.basename(video_path), f, "video/mp4")}, timeout=300)
-        resp.raise_for_status()
-        job_id = resp.json()["job_id"]
-        
-        video.job_id = job_id
-        db.commit()
+        if not is_npz:
+            # 1. Submit to TRIBEv2
+            video.status = models.JobStatus.INFERENCE
+            db.commit()
+            
+            url = f"{TRIBEV2_API_BASE_URL}/api/v1/jobs/analyze"
+            with open(video_path, "rb") as f:
+                resp = requests.post(url, files={"video": (os.path.basename(video_path), f, "video/mp4")}, timeout=300)
+            resp.raise_for_status()
+            job_id = resp.json()["job_id"]
+            
+            video.job_id = job_id
+            db.commit()
 
-        # 2. Poll for completion
-        status_url = f"{TRIBEV2_API_BASE_URL}/api/v1/jobs/{job_id}/status"
-        while True:
-            status_resp = requests.get(status_url, timeout=30)
-            status_resp.raise_for_status()
-            status_data = status_resp.json()
-            api_status = status_data.get("status", "UNKNOWN")
-            
-            if api_status == "COMPLETED":
-                break
-            elif api_status in ["FAILED", "DELETED"]:
-                raise Exception(f"TRIBEv2 API returned terminal status: {api_status}")
-            
-            time.sleep(10) # Poll every 10 seconds
-            
-        # 3. Download .npz
-        result_url = f"{TRIBEV2_API_BASE_URL}/api/v1/jobs/{job_id}/result"
-        npz_dest = f"{os.path.splitext(video_path)[0]}.npz"
-        with requests.get(result_url, stream=True, timeout=300) as r:
-            r.raise_for_status()
-            with open(npz_dest, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    
-        video.npz_path = npz_dest
+            # 2. Poll for completion
+            status_url = f"{TRIBEV2_API_BASE_URL}/api/v1/jobs/{job_id}/status"
+            while True:
+                status_resp = requests.get(status_url, timeout=30)
+                status_resp.raise_for_status()
+                status_data = status_resp.json()
+                api_status = status_data.get("status", "UNKNOWN")
+                
+                if api_status == "COMPLETED":
+                    break
+                elif api_status in ["FAILED", "DELETED"]:
+                    raise Exception(f"TRIBEv2 API returned terminal status: {api_status}")
+                
+                time.sleep(10) # Poll every 10 seconds
+                
+            # 3. Download .npz
+            result_url = f"{TRIBEV2_API_BASE_URL}/api/v1/jobs/{job_id}/result"
+            npz_dest = f"{os.path.splitext(video_path)[0]}.npz"
+            with requests.get(result_url, stream=True, timeout=300) as r:
+                r.raise_for_status()
+                with open(npz_dest, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                        
+            video.npz_path = npz_dest
+        else:
+            npz_dest = video_path
+
         video.status = models.JobStatus.ANALYZING
         db.commit()
 

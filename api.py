@@ -12,9 +12,12 @@ STORAGE_DIR = os.getenv("STORAGE_DIR", "./uploads")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 @router.post("/upload", response_model=schemas.VideoResponse)
-def upload_video(file: UploadFile = File(...), db: Session = Depends(database.get_db)):
-    if not file.filename.endswith(".mp4"):
-        raise HTTPException(status_code=400, detail="Only .mp4 files are supported.")
+def upload_file(file: UploadFile = File(...), db: Session = Depends(database.get_db)):
+    is_npz = file.filename.endswith(".npz")
+    is_mp4 = file.filename.endswith(".mp4")
+    
+    if not (is_mp4 or is_npz):
+        raise HTTPException(status_code=400, detail="Only .mp4 or .npz files are supported.")
         
     db_video = models.Video(filename=file.filename, original_name=file.filename)
     db.add(db_video)
@@ -27,10 +30,13 @@ def upload_video(file: UploadFile = File(...), db: Session = Depends(database.ge
         shutil.copyfileobj(file.file, file_object)
 
     db_video.filename = f"{db_video.id}_{file.filename}"
+    if is_npz:
+        db_video.npz_path = file_location
+        
     db.commit()
 
     # Trigger Celery task
-    process_video_task.delay(str(db_video.id), file_location)
+    process_video_task.delay(str(db_video.id), file_location, is_npz)
 
     return db_video
 
@@ -59,10 +65,12 @@ def get_video_report(video_id: UUID, db: Session = Depends(database.get_db)):
     
     # Load timeseries from .npz
     timeseries_data = {}
+    global_mean_data = []
     if db_video.npz_path and os.path.exists(db_video.npz_path):
         from analyzer import analyzer as brain_analyzer
         analysis_result = brain_analyzer.analyze(db_video.npz_path)
         timeseries_data = analysis_result.get('timeseries', {})
+        global_mean_data = analysis_result.get('global_mean', [])
         
     return {
         "video": {
@@ -78,5 +86,6 @@ def get_video_report(video_id: UUID, db: Session = Depends(database.get_db)):
             "attention": scores.attention_score,
             "language": scores.language_score,
         },
-        "timeseries": timeseries_data
+        "timeseries": timeseries_data,
+        "global_mean": global_mean_data
     }
