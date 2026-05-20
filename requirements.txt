@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+alembic
+celery
+redis
+requests
+numpy
+pandas
+scipy
+nilearn
+python-multipart
+python-dotenv
