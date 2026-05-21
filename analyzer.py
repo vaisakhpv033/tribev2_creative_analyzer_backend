@@ -4,11 +4,6 @@ from nilearn import datasets
 
 class BrainAnalyzer:
     def __init__(self):
-        print("Loading Destrieux surface atlas...")
-        self.destrieux_atlas = datasets.fetch_atlas_surf_destrieux()
-        self.roi_map = np.concatenate([self.destrieux_atlas['map_left'], self.destrieux_atlas['map_right']])
-        self.labels = [lbl.decode('utf-8') if isinstance(lbl, bytes) else lbl for lbl in self.destrieux_atlas['labels']]
-        
         # Define region groups based on the System Design specs
         self.region_groups = {
             'visual': [
@@ -31,11 +26,32 @@ class BrainAnalyzer:
                 'G_temporal_inf', 'S_front_inf', 'G_and_S_cingul-Mid-Ant'
             ]
         }
+        self._initialized = False
 
+    def _ensure_initialized(self):
+        if self._initialized:
+            return
+            
+        print("Loading Destrieux surface atlas...")
+        import time
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self.destrieux_atlas = datasets.fetch_atlas_surf_destrieux()
+                break
+            except Exception as e:
+                print(f"Error fetching atlas (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(2)
+
+        self.roi_map = np.concatenate([self.destrieux_atlas['map_left'], self.destrieux_atlas['map_right']])
+        self.labels = [lbl.decode('utf-8') if isinstance(lbl, bytes) else lbl for lbl in self.destrieux_atlas['labels']]
         self.region_indices = {
             group: self._get_indices_for_labels(labels)
             for group, labels in self.region_groups.items()
         }
+        self._initialized = True
 
     def _get_indices_for_labels(self, target_labels):
         indices = []
@@ -49,6 +65,7 @@ class BrainAnalyzer:
         return np.array(indices)
 
     def analyze(self, npz_path: str):
+        self._ensure_initialized()
         print(f"Loading predictions from {npz_path}...")
         loaded_data = np.load(npz_path, allow_pickle=True)
         preds = loaded_data['preds'] # shape (n_timesteps, 20484)
