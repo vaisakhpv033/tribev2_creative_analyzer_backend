@@ -4,10 +4,12 @@ API Routes
 FastAPI router for the Creative Quality Analyzer.
 
 Endpoints:
-  POST /api/v1/videos/upload     — Upload .mp4 or .npz file for analysis
-  GET  /api/v1/videos/{id}/status — Check processing status
-  GET  /api/v1/videos             — List all videos
-  GET  /api/v1/videos/{id}/report — Full analysis report with scores + predictions
+  POST /api/v1/videos/upload         — Upload .mp4 or .npz file for analysis
+  GET  /api/v1/videos/{id}/status     — Check processing status
+  GET  /api/v1/videos                 — List all videos
+  GET  /api/v1/videos/{id}/report     — Full analysis report with scores + predictions
+  POST /api/v1/videos/{id}/insights   — Generate AI insights (triggers Gemini)
+  GET  /api/v1/videos/{id}/insights   — Fetch saved AI insights
 """
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -15,6 +17,7 @@ from sqlalchemy.orm import Session
 from uuid import UUID
 import shutil
 import os
+import logging
 import schemas, models, database
 from worker import process_video_task
 
@@ -148,3 +151,62 @@ def get_video_report(video_id: UUID, db: Session = Depends(database.get_db)):
         response["predictions"]["ctr_upper_bound"] = scores.ctr_upper_bound
 
     return response
+
+
+# ── Insights Endpoints ────────────────────────────────────────────────────
+
+logger = logging.getLogger("api")
+
+@router.post("/{video_id}/insights")
+def generate_insights(video_id: UUID, db: Session = Depends(database.get_db)):
+    """Generate AI-powered creative insights for a processed video.
+
+    Calls Gemini LLM with the video's brain feature data and CTR prediction
+    to produce structured analysis: strengths, weaknesses, recommendations,
+    and per-feature interpretation.
+
+    Can be called multiple times — each call overwrites the previous insights.
+    Requires the video to be in COMPLETED status with CTR predictions available.
+    """
+    from insights_service import generate_insights as _generate, format_insight_response
+    from llm_client import LLMError
+
+    try:
+        insight = _generate(video_id, db)
+        return format_insight_response(insight)
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    except LLMError as e:
+        logger.error(f"LLM error generating insights for {video_id}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI model error: {str(e)}. Please try again."
+        )
+
+    except Exception as e:
+        logger.error(f"Unexpected error generating insights for {video_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal error generating insights: {str(e)}"
+        )
+
+
+@router.get("/{video_id}/insights")
+def get_insights(video_id: UUID, db: Session = Depends(database.get_db)):
+    """Fetch existing AI insights for a video.
+
+    Returns 404 if no insights have been generated yet.
+    The frontend should call POST to generate insights first.
+    """
+    from insights_service import get_insights as _get, format_insight_response
+
+    insight = _get(video_id, db)
+    if not insight:
+        raise HTTPException(
+            status_code=404,
+            detail="No insights generated yet. Click 'Generate Insights' to create them."
+        )
+
+    return format_insight_response(insight)
