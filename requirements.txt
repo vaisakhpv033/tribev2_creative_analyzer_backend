@@ -13,3 +13,4 @@ nilearn
 python-multipart
 python-dotenv
 xgboost
+google-genai
