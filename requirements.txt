@@ -12,3 +12,4 @@ scipy
 nilearn
 python-multipart
 python-dotenv
+xgboost
