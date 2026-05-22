@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import models
 
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 config = context.config
 
