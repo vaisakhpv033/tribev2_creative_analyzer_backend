@@ -127,8 +127,14 @@ def _load_ml_models():
     return reg, clf, feature_list, p10, p90
 
 
-# Load models at import time (executed once when worker starts)
-_reg_model, _clf_model, _selected_features, _p10_model, _p90_model = _load_ml_models()
+# Load models lazily per-worker to avoid OpenMP deadlocks after Celery fork.
+_ml_models_cache = None
+
+def get_ml_models():
+    global _ml_models_cache
+    if _ml_models_cache is None:
+        _ml_models_cache = _load_ml_models()
+    return _ml_models_cache
 
 
 def _classify_tier(proba: float) -> str:
@@ -322,6 +328,8 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
 
         # ── Step 5b: Run XGBoost CTR prediction (MODEL-BASED) ────────────
         # These are the real CTR predictions from the trained model.
+
+        _reg_model, _clf_model, _selected_features, _p10_model, _p90_model = get_ml_models()
 
         X = np.array([[model_features[f] for f in _selected_features]])
 

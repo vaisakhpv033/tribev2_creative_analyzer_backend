@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: creative_quality
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    command: ./start.sh
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/creative_quality
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - TRIBEV2_API_BASE_URL=${TRIBEV2_API_BASE_URL:-https://kjip4y13qyb2th-8000.proxy.runpod.net}
+      - STORAGE_DIR=/app/uploads
+    volumes:
+      - .:/app
+      - uploads_data:/app/uploads
+    depends_on:
+      - db
+      - redis
+
+  worker:
+    build: .
+    command: celery -A worker.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/creative_quality
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - TRIBEV2_API_BASE_URL=${TRIBEV2_API_BASE_URL:-https://kjip4y13qyb2th-8000.proxy.runpod.net}
+      - STORAGE_DIR=/app/uploads
+    volumes:
+      - .:/app
+      - uploads_data:/app/uploads
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  db_data:
+  uploads_data:

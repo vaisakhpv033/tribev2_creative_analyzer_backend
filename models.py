@@ -19,7 +19,7 @@ NeuralScore stores two types of data:
 import uuid
 import datetime
 import enum
-from sqlalchemy import Column, String, Float, DateTime, Enum as SQLEnum, ForeignKey
+from sqlalchemy import Column, String, Float, Text, DateTime, Enum as SQLEnum, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from database import Base
@@ -46,6 +46,7 @@ class Video(Base):
     npz_path = Column(String, nullable=True)
 
     scores = relationship("NeuralScore", back_populates="video", uselist=False)
+    insights = relationship("CreativeInsight", back_populates="video", uselist=False)
 
 
 class NeuralScore(Base):
@@ -109,3 +110,32 @@ class BaselineCalibration(Base):
     max_value = Column(Float)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow,
                         onupdate=datetime.datetime.utcnow)
+
+
+class CreativeInsight(Base):
+    """AI-generated creative analysis for a video.
+
+    Produced by calling Gemini LLM with the video's brain feature data.
+    Structured output contains executive summary, strengths, weaknesses,
+    recommendations, and per-feature analysis.
+
+    Generated on-demand when the user clicks 'Generate Insights' on the
+    report page. Overwritten on regeneration (one insight per video).
+    """
+    __tablename__ = "creative_insights"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    video_id = Column(UUID(as_uuid=True), ForeignKey("videos.id"), index=True)
+
+    # Structured insight sections
+    summary = Column(Text, nullable=True)             # Executive summary
+    strengths = Column(Text, nullable=True)            # JSON array of strength objects
+    weaknesses = Column(Text, nullable=True)           # JSON array of weakness objects
+    recommendations = Column(Text, nullable=True)      # JSON array of recommendation objects
+    feature_analysis = Column(Text, nullable=True)     # JSON array of per-feature analysis
+
+    # Metadata
+    model_used = Column(String, default="gemini-2.5-flash")
+    generated_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    video = relationship("Video", back_populates="insights")

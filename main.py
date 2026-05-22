@@ -5,7 +5,8 @@ from database import engine
 import models
 
 # Initialize Database tables
-models.Base.metadata.create_all(bind=engine)
+# Schema creation is handled by Alembic migrations
+# models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Creative Quality Scorer API",

@@ -55,3 +55,44 @@ class VideoResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ── Creative Insight Schemas ──────────────────────────────────────────────
+
+class FeatureAnalysis(BaseModel):
+    """Per-feature analysis from the LLM."""
+    feature_name: str
+    value: float
+    rating: str           # "excellent", "good", "average", "poor"
+    interpretation: str   # What this value means for this ad
+
+class InsightStrength(BaseModel):
+    """A strength identified in the ad's neural response."""
+    title: str
+    description: str
+    impact: str           # "high", "medium", "low"
+
+class InsightWeakness(BaseModel):
+    """A weakness identified in the ad's neural response."""
+    title: str
+    description: str
+    impact: str           # "high", "medium", "low"
+
+class InsightRecommendation(BaseModel):
+    """An actionable recommendation to improve the ad."""
+    title: str
+    description: str
+    priority: str         # "high", "medium", "low"
+    expected_impact: str  # Brief description of expected improvement
+
+class CreativeInsightResponse(BaseModel):
+    """Full structured creative insight response."""
+    id: str
+    video_id: str
+    summary: str
+    strengths: list[InsightStrength]
+    weaknesses: list[InsightWeakness]
+    recommendations: list[InsightRecommendation]
+    feature_analysis: list[FeatureAnalysis]
+    model_used: str
+    generated_at: Optional[str] = None
