@@ -57,9 +57,9 @@ docker-compose up --build -d
 *Note: The initial build might take a few minutes because the backend uses heavy data science libraries like `xgboost`, `scipy`, and `nilearn` which require system-level C-compilers to install.*
 
 ### Step 4: Verify the Deployment
-Once the containers are running, verify the API is up by checking the health endpoint. You can do this by visiting `http://localhost:8000/health` in your browser or running:
+Once the containers are running, verify the API is up by checking the health endpoint. You can do this by visiting `http://localhost:8055/health` in your browser or running:
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8055/health
 ```
 **Expected Output:**
 ```json
@@ -68,7 +68,37 @@ curl http://localhost:8000/health
 
 ---
 
-## 4. Managing the Stack (Daily Workflow)
+## 4. Deploying on a Shared Server behind Nginx
+
+If you are hosting this on a server that already runs other web applications, you should use Nginx as a reverse proxy to avoid conflicts.
+
+### Port Isolation
+The `docker-compose.yml` file is specifically configured for shared servers:
+- **No Database Port Clashes**: PostgreSQL and Redis ports (`5432` and `6379`) are completely hidden from the host server. They communicate safely over Docker's internal network.
+- **Isolated API Port**: The API is exposed on `localhost:8055` instead of `8000` (which is often taken by other Django/FastAPI apps).
+
+### Nginx Configuration
+A template Nginx configuration is provided in `nginx_site.conf.example`.
+
+1. Copy the configuration file to Nginx's `sites-available` directory:
+   ```bash
+   sudo cp nginx_site.conf.example /etc/nginx/sites-available/tribev2-api
+   ```
+2. Link it to `sites-enabled`:
+   ```bash
+   sudo ln -s /etc/nginx/sites-available/tribev2-api /etc/nginx/sites-enabled/
+   ```
+3. Test Nginx syntax and reload:
+   ```bash
+   sudo nginx -t
+   sudo systemctl reload nginx
+   ```
+
+Your API will now be securely accessible at `tribev2.vaisakhpv.space` without disrupting any of the other Django or FastAPI applications running on your server!
+
+---
+
+## 5. Managing the Stack (Daily Workflow)
 
 You **do not** need to rebuild the containers every time you stop them or change code. Here is a breakdown of the daily workflow commands:
 
@@ -121,12 +151,12 @@ You **only** need to run `docker-compose up --build -d` when you make changes to
 - If using Docker Desktop (Windows/Mac), go to Settings -> Resources and increase Memory to at least 4GB or 8GB.
 - If on a Linux server, ensure you have at least 4GB of RAM or configure a Swapfile.
 
-### Issue 3: Port `8000`, `5432`, or `6379` is already allocated
+### Issue 3: Port `8055` is already allocated
 **Symptom**: `docker-compose up` fails stating `bind: address already in use`.
-**Cause**: You have another service (like a local Postgres or Redis installation) already running on your host machine using the required ports.
+**Cause**: You have another service running on your host machine using port 8055.
 **Resolution**: 
-1. Stop the local service running on that port.
-2. Or, change the port mapping in `docker-compose.yml`. For example, change `"8000:8000"` to `"8080:8000"` to expose the API on port 8080 instead.
+1. Find the service using `sudo netstat -tuln | grep 8055`.
+2. Or, simply change the port mapping in `docker-compose.yml`. For example, change `"8055:8000"` to `"8080:8000"` to expose the API on port 8080 instead.
 
 ### Issue 4: Background tasks are stuck in "Pending"
 **Symptom**: You submit a video for analysis, but it never completes. The task stays "Pending".
