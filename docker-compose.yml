@@ -23,9 +23,14 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/creative_quality
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - TRIBEV2_API_BASE_URL=${TRIBEV2_API_BASE_URL:-https://kjip4y13qyb2th-8000.proxy.runpod.net}
       - STORAGE_DIR=/app/uploads
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,http://localhost:3000,https://tribev2.vaisakhpv.space}
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
+      - RUNPOD_TEMPLATE_ID=${RUNPOD_TEMPLATE_ID}
+      - RUNPOD_GPU_TYPES=${RUNPOD_GPU_TYPES:-NVIDIA RTX A4000,NVIDIA RTX A5000,NVIDIA A40}
+      - RUNPOD_IDLE_TIMEOUT_SECONDS=${RUNPOD_IDLE_TIMEOUT_SECONDS:-120}
+      - TRIBEV2_API_BASE_URL=${TRIBEV2_API_BASE_URL:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     volumes:
       - .:/app
       - uploads_data:/app/uploads
@@ -41,13 +46,32 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/creative_quality
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - TRIBEV2_API_BASE_URL=${TRIBEV2_API_BASE_URL:-https://kjip4y13qyb2th-8000.proxy.runpod.net}
       - STORAGE_DIR=/app/uploads
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
+      - RUNPOD_TEMPLATE_ID=${RUNPOD_TEMPLATE_ID}
+      - RUNPOD_GPU_TYPES=${RUNPOD_GPU_TYPES:-NVIDIA RTX A4000,NVIDIA RTX A5000,NVIDIA A40}
+      - RUNPOD_IDLE_TIMEOUT_SECONDS=${RUNPOD_IDLE_TIMEOUT_SECONDS:-120}
+      - TRIBEV2_API_BASE_URL=${TRIBEV2_API_BASE_URL:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     volumes:
       - .:/app
       - uploads_data:/app/uploads
     depends_on:
       - db
+      - redis
+
+  celery-beat:
+    build: .
+    restart: unless-stopped
+    command: celery -A worker.celery_app beat --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
+      - RUNPOD_TEMPLATE_ID=${RUNPOD_TEMPLATE_ID}
+      - RUNPOD_GPU_TYPES=${RUNPOD_GPU_TYPES:-NVIDIA RTX A4000,NVIDIA RTX A5000,NVIDIA A40}
+      - RUNPOD_IDLE_TIMEOUT_SECONDS=${RUNPOD_IDLE_TIMEOUT_SECONDS:-120}
+    depends_on:
       - redis
 
 volumes:
