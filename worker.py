@@ -51,6 +51,7 @@ from dotenv import load_dotenv
 from database import SessionLocal
 import models
 from analyzer import analyzer as brain_analyzer
+from runpod_manager import get_runpod_manager, PodProvisioningError
 
 load_dotenv()
 
@@ -60,7 +61,8 @@ logger = get_task_logger(__name__)
 # ── Celery Setup ─────────────────────────────────────────────────────────────
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
-TRIBEV2_API_BASE_URL = os.getenv("TRIBEV2_API_BASE_URL", "http://localhost:8000")
+TRIBEV2_API_BASE_URL = os.getenv("TRIBEV2_API_BASE_URL", "")
+RUNPOD_IDLE_TIMEOUT_SECONDS = int(os.getenv("RUNPOD_IDLE_TIMEOUT_SECONDS", "120"))
 
 celery_app = Celery(
     "creative_quality_worker",
@@ -77,6 +79,15 @@ celery_app.conf.update(
     task_soft_time_limit=3300,
     worker_prefetch_multiplier=1,
 )
+
+# ── Celery Beat Schedule (for watchdog cleanup) ──────────────────────────────
+celery_app.conf.beat_schedule = {
+    'watchdog-cleanup-every-3-min': {
+        'task': 'watchdog_cleanup_pod',
+        'schedule': 180.0,
+    },
+}
+celery_app.conf.timezone = 'UTC'
 
 
 # ── XGBoost Model Loading ───────────────────────────────────────────────────
@@ -183,6 +194,30 @@ def _update_video_status(video_id: str, status: models.JobStatus,
         db.close()
 
 
+# ── RunPod Cleanup Tasks ─────────────────────────────────────────────────────
+
+@celery_app.task(name="maybe_cleanup_pod")
+def maybe_cleanup_pod():
+    """Delayed task: delete the pod if idle for longer than the timeout."""
+    mgr = get_runpod_manager()
+    if mgr:
+        try:
+            mgr.cleanup_if_idle()
+        except Exception as e:
+            logger.error(f"maybe_cleanup_pod failed: {e}")
+
+
+@celery_app.task(name="watchdog_cleanup_pod")
+def watchdog_cleanup_pod():
+    """Periodic safety net: find and delete orphaned pods."""
+    mgr = get_runpod_manager()
+    if mgr:
+        try:
+            mgr.force_cleanup_all()
+        except Exception as e:
+            logger.error(f"watchdog_cleanup_pod failed: {e}")
+
+
 # ── Main Task ────────────────────────────────────────────────────────────────
 
 @celery_app.task(name="process_video_task", bind=True, max_retries=5)
@@ -198,6 +233,13 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
         _update_video_status(video_id, models.JobStatus.FAILED)
         return {"error": error_msg}
 
+    # Determine if we're using managed RunPod mode
+    runpod_mgr = get_runpod_manager()
+    managed_mode = runpod_mgr is not None
+
+    if managed_mode:
+        runpod_mgr.increment_active()
+
     db = SessionLocal()
     try:
         # Fetch the video record
@@ -208,15 +250,37 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
             return {"error": "Video not found"}
 
         if not is_npz:
+            # ── Step 1: Ensure GPU pod is ready ───────────────────────────
+            if managed_mode:
+                def status_callback(status_str: str):
+                    """Update video status during pod lifecycle."""
+                    try:
+                        status_enum = models.JobStatus(status_str)
+                        _update_video_status(video_id, status_enum)
+                    except ValueError:
+                        logger.warning(f"[{video_id}] Unknown status: {status_str}")
+
+                logger.info(f"[{video_id}] Ensuring GPU pod is ready (managed mode)...")
+                base_url = runpod_mgr.ensure_pod_ready(status_callback=status_callback)
+                logger.info(f"[{video_id}] GPU pod ready at {base_url}")
+            else:
+                if not TRIBEV2_API_BASE_URL:
+                    raise PermanentTaskFailure(
+                        "No GPU endpoint configured. Set TRIBEV2_API_BASE_URL or "
+                        "enable RunPod managed mode (RUNPOD_API_KEY + RUNPOD_TEMPLATE_ID)."
+                    )
+                base_url = TRIBEV2_API_BASE_URL
+                logger.info(f"[{video_id}] Using static GPU endpoint: {base_url}")
+
             job_id = video.job_id
 
-            # ── Step 1: Submit to TRIBEv2 ────────────────────────────────
+            # ── Step 2: Submit to TRIBEv2 ────────────────────────────────
             if not job_id:
                 logger.info(f"[{video_id}] Submitting video to TRIBEv2...")
                 video.status = models.JobStatus.INFERENCE
                 db.commit()
 
-                url = f"{TRIBEV2_API_BASE_URL}/api/v1/jobs/analyze"
+                url = f"{base_url}/api/v1/jobs/analyze"
                 try:
                     with open(video_path, "rb") as f:
                         resp = requests.post(
@@ -240,8 +304,8 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
             else:
                 logger.info(f"[{video_id}] Found existing Job ID: {job_id}. Resuming polling.")
 
-            # ── Step 2: Poll for completion ───────────────────────────────
-            status_url = f"{TRIBEV2_API_BASE_URL}/api/v1/jobs/{job_id}/status"
+            # ── Step 3: Poll for completion ───────────────────────────────
+            status_url = f"{base_url}/api/v1/jobs/{job_id}/status"
             logger.info(f"[{video_id}] Polling TRIBEv2 job status...")
 
             poll_count = 0
@@ -276,10 +340,10 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
                     raise Exception(f"Polling timed out after 30 min for Job {job_id}")
                 time.sleep(15)
 
-            # ── Step 3: Download .npz atomically ─────────────────────────
+            # ── Step 4: Download .npz atomically ─────────────────────────
             npz_dest = f"{os.path.splitext(video_path)[0]}.npz"
             npz_tmp = f"{npz_dest}.tmp"
-            result_url = f"{TRIBEV2_API_BASE_URL}/api/v1/jobs/{job_id}/result"
+            result_url = f"{base_url}/api/v1/jobs/{job_id}/result"
 
             logger.info(f"[{video_id}] Downloading .npz → {npz_dest}")
             try:
@@ -302,7 +366,7 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
         else:
             npz_dest = video_path
 
-        # ── Step 4: Extract brain features ───────────────────────────────
+        # ── Step 5: Extract brain features ───────────────────────────────
         logger.info(f"[{video_id}] Analyzing neural features from {npz_dest}...")
         video.status = models.JobStatus.ANALYZING
         db.commit()
@@ -311,7 +375,7 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
         raw_scores = analysis_result['raw_scores']
         model_features = analysis_result['model_features']
 
-        # ── Step 5a: Compute LEGACY dimension scores (0-100 scale) ───────
+        # ── Step 6a: Compute LEGACY dimension scores (0-100 scale) ───────
         # These are the radar-chart scores. Kept for backward compatibility.
         # NOTE: These use a simple linear transform and have low CTR correlation.
 
@@ -326,7 +390,7 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
         language_score  = scale_dimension(raw_scores['language'])
         attention_score = min(100.0, max(0.0, raw_scores['attention'] * 50))
 
-        # ── Step 5b: Run XGBoost CTR prediction (MODEL-BASED) ────────────
+        # ── Step 6b: Run XGBoost CTR prediction (MODEL-BASED) ────────────
         # These are the real CTR predictions from the trained model.
 
         _reg_model, _clf_model, _selected_features, _p10_model, _p90_model = get_ml_models()
@@ -365,7 +429,7 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
             f"tier={prediction_tier}, overall_score={overall_score:.1f}"
         )
 
-        # ── Step 6: Save to database ─────────────────────────────────────
+        # ── Step 7: Save to database ─────────────────────────────────────
         score_record = db.query(models.NeuralScore).filter(
             models.NeuralScore.video_id == video_id
         ).first()
@@ -426,6 +490,34 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
             db.rollback()
         raise ptf
 
+    except PodProvisioningError as ppe:
+        # Pod provisioning failed — this is retryable
+        logger.error(f"[{video_id}] Pod provisioning error: {ppe}")
+        retries = self.request.retries
+        max_retries = self.max_retries
+        countdown = (2 ** retries) * 30
+
+        if retries >= max_retries:
+            logger.error(f"[{video_id}] Max retries ({max_retries}) reached for pod provisioning.")
+            try:
+                db.rollback()
+                video = db.query(models.Video).filter(models.Video.id == video_id).first()
+                if video:
+                    video.status = models.JobStatus.FAILED
+                    db.commit()
+            except Exception as dbe:
+                logger.error(f"[{video_id}] Failed to set FAILED status: {dbe}")
+                db.rollback()
+            raise ppe
+        else:
+            logger.warning(
+                f"[{video_id}] Pod provisioning error. "
+                f"Retrying in {countdown}s (Attempt {retries + 1}/{max_retries})."
+            )
+            db.rollback()
+            db.close()
+            raise self.retry(exc=ppe, countdown=countdown)
+
     except Exception as exc:
         retries = self.request.retries
         max_retries = self.max_retries
@@ -453,6 +545,15 @@ def process_video_task(self, video_id: str, video_path: str, is_npz: bool = Fals
             raise self.retry(exc=exc, countdown=countdown)
 
     finally:
+        # ALWAYS decrement active count and schedule cleanup
+        if managed_mode:
+            try:
+                runpod_mgr.decrement_active()
+                # Schedule cleanup check after idle timeout
+                maybe_cleanup_pod.apply_async(countdown=RUNPOD_IDLE_TIMEOUT_SECONDS)
+                logger.info(f"[{video_id}] Scheduled pod cleanup check in {RUNPOD_IDLE_TIMEOUT_SECONDS}s.")
+            except Exception as ce:
+                logger.error(f"[{video_id}] Failed to schedule cleanup: {ce}")
         db.close()
 
     return {"status": "finished", "video_id": video_id}

@@ -27,6 +27,8 @@ from database import Base
 
 class JobStatus(str, enum.Enum):
     PENDING = "PENDING"
+    PROVISIONING_GPU = "PROVISIONING_GPU"
+    BOOTING_GPU = "BOOTING_GPU"
     UPLOADING = "UPLOADING"
     INFERENCE = "INFERENCE"
     ANALYZING = "ANALYZING"
