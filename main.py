@@ -14,11 +14,12 @@ app = FastAPI(
     version="1.0.0",
 )
 
+import os
+
 # CORS configuration
-origins = [
-    "http://localhost",
-    "http://localhost:3000",
-]
+# You can set multiple origins by separating them with commas
+cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost,http://localhost:3000")
+origins = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
