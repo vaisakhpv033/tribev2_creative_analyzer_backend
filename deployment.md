@@ -17,6 +17,7 @@ The backend is fully dockerized to ensure a consistent environment across develo
 
 ### Automation
 - **Migrations**: The API container uses a startup script (`start.sh`) that automatically runs database migrations (`alembic upgrade head`) before booting up the Uvicorn server. You do not need to manage schema migrations manually.
+- **Auto-Restarts**: All containers are configured with `restart: unless-stopped`. If the server reboots or a container crashes, Docker will automatically restart them.
 
 ---
 
@@ -77,24 +78,35 @@ The `docker-compose.yml` file is specifically configured for shared servers:
 - **No Database Port Clashes**: PostgreSQL and Redis ports (`5432` and `6379`) are completely hidden from the host server. They communicate safely over Docker's internal network.
 - **Isolated API Port**: The API is exposed on `localhost:8055` instead of `8000` (which is often taken by other Django/FastAPI apps).
 
-### Nginx Configuration
-A template Nginx configuration is provided in `nginx_site.conf.example`.
+### Nginx Configuration & SSL (Certbot)
+A template Nginx configuration is provided in `nginx_site.conf.example`. Here is exactly how to set it up and secure it with HTTPS:
 
-1. Copy the configuration file to Nginx's `sites-available` directory:
+1. **Copy the Configuration File**:
+   Copy the provided template into Nginx's `sites-available` directory:
    ```bash
    sudo cp nginx_site.conf.example /etc/nginx/sites-available/tribev2-api
    ```
-2. Link it to `sites-enabled`:
+2. **Enable the Configuration**:
+   Create a symbolic link to activate it:
    ```bash
    sudo ln -s /etc/nginx/sites-available/tribev2-api /etc/nginx/sites-enabled/
    ```
-3. Test Nginx syntax and reload:
+3. **Verify DNS**:
+   Before proceeding, ensure your domain registrar (e.g., GoDaddy, Namecheap) has an `A Record` for `tribev2.vaisakhpv.space` pointing to this server's public IP address.
+4. **Test and Reload Nginx**:
+   Verify you have no syntax errors, then reload Nginx so it starts listening on port 80:
    ```bash
    sudo nginx -t
    sudo systemctl reload nginx
    ```
+5. **Install SSL with Certbot**:
+   Run Certbot to automatically fetch an SSL certificate and reconfigure your Nginx file to use HTTPS:
+   ```bash
+   sudo certbot --nginx -d tribev2.vaisakhpv.space
+   ```
+   *(When prompted, choose to redirect HTTP traffic to HTTPS).*
 
-Your API will now be securely accessible at `tribev2.vaisakhpv.space` without disrupting any of the other Django or FastAPI applications running on your server!
+Your API will now be securely accessible at `https://tribev2.vaisakhpv.space`!
 
 ---
 

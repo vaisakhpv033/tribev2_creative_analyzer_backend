@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:15-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -10,10 +11,12 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
 
   api:
     build: .
-    command: ./start.sh
+    restart: unless-stopped
+    command: bash ./start.sh
     ports:
       - "8055:8000"
     environment:
@@ -22,6 +25,7 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - TRIBEV2_API_BASE_URL=${TRIBEV2_API_BASE_URL:-https://kjip4y13qyb2th-8000.proxy.runpod.net}
       - STORAGE_DIR=/app/uploads
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,http://localhost:3000,https://tribev2.vaisakhpv.space}
     volumes:
       - .:/app
       - uploads_data:/app/uploads
@@ -31,6 +35,7 @@ services:
 
   worker:
     build: .
+    restart: unless-stopped
     command: celery -A worker.celery_app worker --loglevel=info
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/creative_quality
