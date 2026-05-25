@@ -404,9 +404,18 @@ class RunPodManager:
                 raise PodProvisioningError(f"Pod {pod_id} not found while waiting for RUNNING")
 
             runtime = pod_info.get("runtime")
+            logger.info(f"DEBUG Pod info: {pod_info}")
+            
             # Check if pod has a runtime with uptime (means it's running)
-            if runtime and runtime.get("uptimeInSeconds"):
-                logger.info(f"Pod {pod_id} is RUNNING (uptime: {runtime['uptimeInSeconds']}s)")
+            if runtime and runtime.get("uptimeInSeconds") is not None:
+                logger.info(f"Pod {pod_id} is RUNNING (uptime: {runtime.get('uptimeInSeconds')}s)")
+                return
+                
+            # FALLBACK: Sometimes RunPod API lags behind the actual pod state.
+            # Let's actively ping the proxy URL to see if it's already alive!
+            base_url = self._get_proxy_url(pod_id)
+            if self._health_check(base_url):
+                logger.info(f"Pod {pod_id} health check passed early! It is definitely RUNNING.")
                 return
 
             desired = pod_info.get("desiredStatus", "UNKNOWN")
